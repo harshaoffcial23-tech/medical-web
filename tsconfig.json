@@ -1,0 +1,74 @@
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useCart } from "@/hooks/use-cart";
+import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { useState } from "react";
+
+export const Route = createFileRoute("/checkout")({ component: Checkout });
+
+function Checkout() {
+  const { user } = useAuth();
+  const { items, subtotal, discount, total, clearCart } = useCart();
+  const navigate = useNavigate();
+  const [form, setForm] = useState({ full_name: "", phone: "", line1: "", city: "", state: "", postal_code: "" });
+  const [loading, setLoading] = useState(false);
+
+  if (!user) return <div className="p-12 text-center"><p>Please <Link to="/auth" className="text-primary underline">sign in</Link> to checkout.</p></div>;
+  if (items.length === 0) return <div className="p-12 text-center"><p>Your cart is empty.</p></div>;
+
+  async function placeOrder(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    const { data: order, error } = await supabase.from("orders").insert({
+      user_id: user!.id,
+      subtotal, discount, total,
+      shipping_fee: 0,
+      payment_method: "cod",
+      shipping_address: form,
+    }).select().single();
+    if (error || !order) { setLoading(false); toast.error("Couldn't place order"); return; }
+    const lineItems = items.map((i) => {
+      const unit = Number(i.product.mrp) * (1 - Number(i.product.discount_percent) / 100);
+      return {
+        order_id: order.id, product_id: i.product_id, product_name: i.product.name,
+        product_image: i.product.image_url, unit_price: unit, quantity: i.quantity,
+        line_total: unit * i.quantity,
+      };
+    });
+    await supabase.from("order_items").insert(lineItems);
+    await clearCart();
+    toast.success("Order placed!");
+    navigate({ to: "/account/orders" });
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-12">
+      <h1 className="font-display text-3xl font-bold mb-8">Checkout</h1>
+      <form onSubmit={placeOrder} className="grid lg:grid-cols-2 gap-8">
+        <div className="space-y-4 glass-card p-6 rounded-2xl">
+          <h2 className="font-display font-semibold text-lg">Shipping address</h2>
+          {(["full_name","phone","line1","city","state","postal_code"] as const).map((k) => (
+            <div key={k} className="space-y-2">
+              <Label htmlFor={k} className="capitalize">{k.replace("_", " ")}</Label>
+              <Input id={k} required value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
+            </div>
+          ))}
+        </div>
+        <aside className="glass-card p-6 rounded-2xl h-fit space-y-3">
+          <h2 className="font-display font-semibold text-lg">Summary</h2>
+          <div className="flex justify-between text-sm"><span>Subtotal</span><span>₹{subtotal.toFixed(0)}</span></div>
+          <div className="flex justify-between text-sm"><span>Discount</span><span className="text-mint">-₹{discount.toFixed(0)}</span></div>
+          <div className="border-t pt-3 flex justify-between font-bold"><span>Total</span><span>₹{total.toFixed(0)}</span></div>
+          <p className="text-xs text-muted-foreground">Payment: Cash on Delivery</p>
+          <Button type="submit" disabled={loading} size="lg" className="w-full rounded-xl gradient-primary text-primary-foreground border-0">
+            {loading ? "Placing…" : "Place order"}
+          </Button>
+        </aside>
+      </form>
+    </div>
+  );
+}
